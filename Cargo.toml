@@ -1,0 +1,26 @@
+[package]
+name = "alluno-gamepad-sys"
+version = "1.0.0"
+edition = "2021"
+description = "Cross-platform virtual gamepad creation (ViGEmBus-compatible bus drivers on Windows, uinput on Linux)"
+license = "MIT"
+authors = ["Adidharma Torutama <adidharmatoru@alluno.io>"]
+repository = "https://github.com/alluno-io/alluno-gamepad-sys"
+
+[[bin]]
+name = "alluno-gamepad-test"
+path = "src/bin/test.rs"
+
+[dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Threading",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
