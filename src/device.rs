@@ -30,8 +30,7 @@ impl AllunoGamepad {
         Self::with_kind(GamepadKind::Xbox360, name)
     }
 
-    /// Create a controller of the given kind with a specific device name. On
-    /// Linux the kind is ignored (uinput xpad has no XInput cap).
+    /// Create a controller of the given kind with a specific device name.
     pub fn with_kind(kind: GamepadKind, name: &str) -> Result<Self> {
         #[cfg(target_os = "windows")]
         {
@@ -53,9 +52,8 @@ impl AllunoGamepad {
         }
         #[cfg(target_os = "linux")]
         {
-            let _ = kind;
             Ok(Self {
-                inner: UinputGamepad::create(name)?,
+                inner: UinputGamepad::create(name, kind)?,
             })
         }
     }
@@ -83,7 +81,7 @@ impl AllunoGamepad {
         }
         #[cfg(target_os = "linux")]
         {
-            GamepadKind::Xbox360
+            self.inner.kind()
         }
     }
 
@@ -103,7 +101,6 @@ impl AllunoGamepad {
     }
 
     /// Stream force-feedback from games to a callback on a dedicated thread.
-    /// No-op for DualShock 4 (input only).
     pub fn spawn_notification<F>(&self, callback: F) -> Result<()>
     where
         F: FnMut(GamepadNotification) + Send + 'static,
@@ -112,7 +109,7 @@ impl AllunoGamepad {
         {
             match &self.inner {
                 Inner::Xbox360(t) => t.spawn_notification(callback),
-                Inner::Ds4(_) => Ok(()),
+                Inner::Ds4(t) => t.spawn_notification(callback),
             }
         }
         #[cfg(target_os = "linux")]

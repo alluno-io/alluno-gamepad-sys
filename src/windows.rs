@@ -32,6 +32,7 @@ const IOCTL_WAIT_DEVICE_READY: u32 = 0x2AA010;
 const IOCTL_XUSB_REQUEST_NOTIFICATION: u32 = 0x2AE804;
 const IOCTL_XUSB_SUBMIT_REPORT: u32 = 0x2AA808;
 const IOCTL_DS4_SUBMIT_REPORT: u32 = 0x2AA80C;
+const IOCTL_DS4_REQUEST_NOTIFICATION: u32 = 0x2AA810;
 const IOCTL_XUSB_GET_USER_INDEX: u32 = 0x2AE81C;
 
 const API_VERSION_COMMON: u32 = 0x0001;
@@ -143,6 +144,17 @@ struct Ds4SubmitReport {
     size: u32,
     serial_no: u32,
     report: Ds4Report,
+}
+
+#[repr(C)]
+struct Ds4RequestNotificationBuf {
+    size: u32,
+    serial_no: u32,
+    small_motor: u8,
+    large_motor: u8,
+    lightbar_r: u8,
+    lightbar_g: u8,
+    lightbar_b: u8,
 }
 
 fn xgamepad_to_ds4(g: &XGamepad) -> Ds4Report {
@@ -644,6 +656,54 @@ impl Ds4Target {
                 false,
             )
         }?;
+        Ok(())
+    }
+
+    pub fn spawn_notification<F>(&self, mut callback: F) -> Result<()>
+    where
+        F: FnMut(GamepadNotification) + Send + 'static,
+    {
+        if !self.is_attached() {
+            return Err(Error::NotPluggedIn);
+        }
+        let device = open_device(&self.bus.path)?;
+        let serial_no = self.serial_no;
+        std::thread::Builder::new()
+            .name("gamepad-rumble".into())
+            .spawn(move || {
+                let device = device;
+                let Ok(event) = Event::new() else {
+                    return;
+                };
+                loop {
+                    let mut req = Ds4RequestNotificationBuf {
+                        size: mem::size_of::<Ds4RequestNotificationBuf>() as u32,
+                        serial_no,
+                        small_motor: 0,
+                        large_motor: 0,
+                        lightbar_r: 0,
+                        lightbar_g: 0,
+                        lightbar_b: 0,
+                    };
+                    match unsafe {
+                        ioctl(
+                            device.0,
+                            event.0,
+                            IOCTL_DS4_REQUEST_NOTIFICATION,
+                            &mut req,
+                            true,
+                        )
+                    } {
+                        Ok(()) => callback(GamepadNotification {
+                            large_motor: req.large_motor,
+                            small_motor: req.small_motor,
+                            led_number: 0,
+                        }),
+                        Err(_) => break,
+                    }
+                }
+            })
+            .map_err(Error::Io)?;
         Ok(())
     }
 

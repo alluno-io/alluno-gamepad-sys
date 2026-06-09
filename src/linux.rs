@@ -1,4 +1,4 @@
-use crate::{xbuttons, GamepadNotification, XGamepad};
+use crate::{xbuttons, GamepadKind, GamepadNotification, XGamepad};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -28,6 +28,20 @@ const BTN_MODE: u16 = 0x13c;
 const BTN_THUMBL: u16 = 0x13d;
 const BTN_THUMBR: u16 = 0x13e;
 
+const DS4_BTN_SQUARE: u16 = 0x130;
+const DS4_BTN_CROSS: u16 = 0x131;
+const DS4_BTN_CIRCLE: u16 = 0x132;
+const DS4_BTN_TRIANGLE: u16 = 0x133;
+const DS4_BTN_L1: u16 = 0x134;
+const DS4_BTN_R1: u16 = 0x135;
+const DS4_BTN_L2: u16 = 0x136;
+const DS4_BTN_R2: u16 = 0x137;
+const DS4_BTN_SHARE: u16 = 0x138;
+const DS4_BTN_OPTIONS: u16 = 0x139;
+const DS4_BTN_L3: u16 = 0x13a;
+const DS4_BTN_R3: u16 = 0x13b;
+const DS4_BTN_PS: u16 = 0x13c;
+
 const ABS_X: u16 = 0x00;
 const ABS_Y: u16 = 0x01;
 const ABS_Z: u16 = 0x02;
@@ -40,6 +54,15 @@ const ABS_HAT0Y: u16 = 0x11;
 const FF_RUMBLE: u16 = 0x50;
 const FF_GAIN: u16 = 0x60;
 const FF_EFFECTS_MAX: u32 = 16;
+
+// VID/PID/version chosen to match SDL's known controller GUIDs so games apply
+// the right mapping and glyphs.
+const XBOX_VENDOR: u16 = 0x045e;
+const XBOX_PRODUCT: u16 = 0x028e;
+const XBOX_VERSION: u16 = 0x0110;
+const DS4_VENDOR: u16 = 0x054c;
+const DS4_PRODUCT: u16 = 0x05c4;
+const DS4_VERSION: u16 = 0x0111;
 
 const UI_FF_UPLOAD: u16 = 1;
 const UI_FF_ERASE: u16 = 2;
@@ -267,6 +290,7 @@ unsafe fn ioctl_ptr<T>(
 pub struct UinputGamepad {
     file: File,
     stop: Arc<AtomicBool>,
+    kind: GamepadKind,
 }
 
 impl UinputGamepad {
@@ -274,7 +298,15 @@ impl UinputGamepad {
         std::path::Path::new(UINPUT_PATH).exists()
     }
 
-    pub fn create(name: &str) -> Result<Self> {
+    pub fn kind(&self) -> GamepadKind {
+        self.kind
+    }
+
+    pub fn create(name: &str, kind: GamepadKind) -> Result<Self> {
+        let (vendor, product, version) = match kind {
+            GamepadKind::Xbox360 => (XBOX_VENDOR, XBOX_PRODUCT, XBOX_VERSION),
+            GamepadKind::DualShock4 => (DS4_VENDOR, DS4_PRODUCT, DS4_VERSION),
+        };
         let mut file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -286,11 +318,28 @@ impl UinputGamepad {
         unsafe {
             ioctl_val(fd, UI_SET_EVBIT, "UI_SET_EVBIT", EV_KEY as libc::c_ulong)?;
 
-            let buttons = [
-                BTN_SOUTH, BTN_EAST, BTN_NORTH, BTN_WEST, BTN_TL, BTN_TR, BTN_SELECT, BTN_START,
-                BTN_MODE, BTN_THUMBL, BTN_THUMBR,
-            ];
-            for btn in buttons {
+            let buttons: &[u16] = match kind {
+                GamepadKind::Xbox360 => &[
+                    BTN_SOUTH, BTN_EAST, BTN_NORTH, BTN_WEST, BTN_TL, BTN_TR, BTN_SELECT,
+                    BTN_START, BTN_MODE, BTN_THUMBL, BTN_THUMBR,
+                ],
+                GamepadKind::DualShock4 => &[
+                    DS4_BTN_SQUARE,
+                    DS4_BTN_CROSS,
+                    DS4_BTN_CIRCLE,
+                    DS4_BTN_TRIANGLE,
+                    DS4_BTN_L1,
+                    DS4_BTN_R1,
+                    DS4_BTN_L2,
+                    DS4_BTN_R2,
+                    DS4_BTN_SHARE,
+                    DS4_BTN_OPTIONS,
+                    DS4_BTN_L3,
+                    DS4_BTN_R3,
+                    DS4_BTN_PS,
+                ],
+            };
+            for &btn in buttons {
                 ioctl_val(fd, UI_SET_KEYBIT, "UI_SET_KEYBIT", btn as libc::c_ulong)?;
             }
 
@@ -311,9 +360,9 @@ impl UinputGamepad {
             name: [0u8; 80],
             id: InputId {
                 bustype: 0x03,
-                vendor: 0x045e,
-                product: 0x028e,
-                version: 0x0110,
+                vendor,
+                product,
+                version,
             },
             ff_effects_max: FF_EFFECTS_MAX,
             absmax: [0; 64],
@@ -326,18 +375,30 @@ impl UinputGamepad {
         let copy_len = name_bytes.len().min(79);
         dev.name[..copy_len].copy_from_slice(&name_bytes[..copy_len]);
 
-        for axis in [ABS_X, ABS_Y, ABS_RX, ABS_RY] {
-            let i = axis as usize;
-            dev.absmin[i] = -32768;
-            dev.absmax[i] = 32767;
-            dev.absfuzz[i] = 16;
-            dev.absflat[i] = 128;
-        }
-
-        for axis in [ABS_Z, ABS_RZ] {
-            let i = axis as usize;
-            dev.absmin[i] = 0;
-            dev.absmax[i] = 1023;
+        match kind {
+            GamepadKind::Xbox360 => {
+                for axis in [ABS_X, ABS_Y, ABS_RX, ABS_RY] {
+                    let i = axis as usize;
+                    dev.absmin[i] = -32768;
+                    dev.absmax[i] = 32767;
+                    dev.absfuzz[i] = 16;
+                    dev.absflat[i] = 128;
+                }
+                for axis in [ABS_Z, ABS_RZ] {
+                    let i = axis as usize;
+                    dev.absmin[i] = 0;
+                    dev.absmax[i] = 1023;
+                }
+            }
+            GamepadKind::DualShock4 => {
+                for axis in [ABS_X, ABS_Y, ABS_Z, ABS_RX, ABS_RY, ABS_RZ] {
+                    let i = axis as usize;
+                    dev.absmin[i] = 0;
+                    dev.absmax[i] = 255;
+                    dev.absfuzz[i] = 0;
+                    dev.absflat[i] = 0;
+                }
+            }
         }
 
         dev.absmin[ABS_HAT0X as usize] = -1;
@@ -360,6 +421,7 @@ impl UinputGamepad {
         Ok(Self {
             file,
             stop: Arc::new(AtomicBool::new(false)),
+            kind,
         })
     }
 
@@ -386,26 +448,6 @@ impl UinputGamepad {
     pub fn update(&mut self, report: &XGamepad) -> Result<()> {
         let pressed = |flag: u16| (report.buttons & flag != 0) as i32;
 
-        self.send_event(EV_KEY, BTN_SOUTH, pressed(xbuttons::A))?;
-        self.send_event(EV_KEY, BTN_EAST, pressed(xbuttons::B))?;
-        self.send_event(EV_KEY, BTN_WEST, pressed(xbuttons::X))?;
-        self.send_event(EV_KEY, BTN_NORTH, pressed(xbuttons::Y))?;
-        self.send_event(EV_KEY, BTN_TL, pressed(xbuttons::LB))?;
-        self.send_event(EV_KEY, BTN_TR, pressed(xbuttons::RB))?;
-        self.send_event(EV_KEY, BTN_SELECT, pressed(xbuttons::BACK))?;
-        self.send_event(EV_KEY, BTN_START, pressed(xbuttons::START))?;
-        self.send_event(EV_KEY, BTN_MODE, pressed(xbuttons::GUIDE))?;
-        self.send_event(EV_KEY, BTN_THUMBL, pressed(xbuttons::LTHUMB))?;
-        self.send_event(EV_KEY, BTN_THUMBR, pressed(xbuttons::RTHUMB))?;
-
-        self.send_event(EV_ABS, ABS_X, report.thumb_lx as i32)?;
-        self.send_event(EV_ABS, ABS_Y, -(report.thumb_ly as i32))?;
-        self.send_event(EV_ABS, ABS_RX, report.thumb_rx as i32)?;
-        self.send_event(EV_ABS, ABS_RY, -(report.thumb_ry as i32))?;
-
-        self.send_event(EV_ABS, ABS_Z, (report.left_trigger as i32) * 1023 / 255)?;
-        self.send_event(EV_ABS, ABS_RZ, (report.right_trigger as i32) * 1023 / 255)?;
-
         let hat_x = if report.buttons & xbuttons::RIGHT != 0 {
             1
         } else if report.buttons & xbuttons::LEFT != 0 {
@@ -420,6 +462,64 @@ impl UinputGamepad {
         } else {
             0
         };
+
+        match self.kind {
+            GamepadKind::Xbox360 => {
+                self.send_event(EV_KEY, BTN_SOUTH, pressed(xbuttons::A))?;
+                self.send_event(EV_KEY, BTN_EAST, pressed(xbuttons::B))?;
+                self.send_event(EV_KEY, BTN_WEST, pressed(xbuttons::X))?;
+                self.send_event(EV_KEY, BTN_NORTH, pressed(xbuttons::Y))?;
+                self.send_event(EV_KEY, BTN_TL, pressed(xbuttons::LB))?;
+                self.send_event(EV_KEY, BTN_TR, pressed(xbuttons::RB))?;
+                self.send_event(EV_KEY, BTN_SELECT, pressed(xbuttons::BACK))?;
+                self.send_event(EV_KEY, BTN_START, pressed(xbuttons::START))?;
+                self.send_event(EV_KEY, BTN_MODE, pressed(xbuttons::GUIDE))?;
+                self.send_event(EV_KEY, BTN_THUMBL, pressed(xbuttons::LTHUMB))?;
+                self.send_event(EV_KEY, BTN_THUMBR, pressed(xbuttons::RTHUMB))?;
+
+                self.send_event(EV_ABS, ABS_X, report.thumb_lx as i32)?;
+                self.send_event(EV_ABS, ABS_Y, -(report.thumb_ly as i32))?;
+                self.send_event(EV_ABS, ABS_RX, report.thumb_rx as i32)?;
+                self.send_event(EV_ABS, ABS_RY, -(report.thumb_ry as i32))?;
+
+                self.send_event(EV_ABS, ABS_Z, (report.left_trigger as i32) * 1023 / 255)?;
+                self.send_event(EV_ABS, ABS_RZ, (report.right_trigger as i32) * 1023 / 255)?;
+            }
+            GamepadKind::DualShock4 => {
+                self.send_event(EV_KEY, DS4_BTN_SQUARE, pressed(xbuttons::X))?;
+                self.send_event(EV_KEY, DS4_BTN_CROSS, pressed(xbuttons::A))?;
+                self.send_event(EV_KEY, DS4_BTN_CIRCLE, pressed(xbuttons::B))?;
+                self.send_event(EV_KEY, DS4_BTN_TRIANGLE, pressed(xbuttons::Y))?;
+                self.send_event(EV_KEY, DS4_BTN_L1, pressed(xbuttons::LB))?;
+                self.send_event(EV_KEY, DS4_BTN_R1, pressed(xbuttons::RB))?;
+                self.send_event(
+                    EV_KEY,
+                    DS4_BTN_L2,
+                    if report.left_trigger > 0 { 1 } else { 0 },
+                )?;
+                self.send_event(
+                    EV_KEY,
+                    DS4_BTN_R2,
+                    if report.right_trigger > 0 { 1 } else { 0 },
+                )?;
+                self.send_event(EV_KEY, DS4_BTN_SHARE, pressed(xbuttons::BACK))?;
+                self.send_event(EV_KEY, DS4_BTN_OPTIONS, pressed(xbuttons::START))?;
+                self.send_event(EV_KEY, DS4_BTN_L3, pressed(xbuttons::LTHUMB))?;
+                self.send_event(EV_KEY, DS4_BTN_R3, pressed(xbuttons::RTHUMB))?;
+                self.send_event(EV_KEY, DS4_BTN_PS, pressed(xbuttons::GUIDE))?;
+
+                let to_u8 = |v: i16| -> i32 { (((v as i32) + 32768) >> 8).clamp(0, 255) };
+                let inv_to_u8 = |v: i16| -> i32 { 255 - to_u8(v) };
+                self.send_event(EV_ABS, ABS_X, to_u8(report.thumb_lx))?;
+                self.send_event(EV_ABS, ABS_Y, inv_to_u8(report.thumb_ly))?;
+                self.send_event(EV_ABS, ABS_Z, to_u8(report.thumb_rx))?;
+                self.send_event(EV_ABS, ABS_RZ, inv_to_u8(report.thumb_ry))?;
+
+                self.send_event(EV_ABS, ABS_RX, report.left_trigger as i32)?;
+                self.send_event(EV_ABS, ABS_RY, report.right_trigger as i32)?;
+            }
+        }
+
         self.send_event(EV_ABS, ABS_HAT0X, hat_x)?;
         self.send_event(EV_ABS, ABS_HAT0Y, hat_y)?;
 

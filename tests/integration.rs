@@ -96,6 +96,7 @@ fn test_ds4_submit() {
     };
     assert_eq!(pad.kind(), GamepadKind::DualShock4);
     assert_eq!(pad.user_index(), None);
+    pad.spawn_notification(|_| {}).expect("ds4 spawn failed");
     let report = XGamepad {
         buttons: xbuttons::A | xbuttons::UP,
         left_trigger: 200,
